@@ -30,6 +30,8 @@ import com.google.gson.JsonObject;
 import com.google.gson.reflect.TypeToken;
 
 import java.lang.reflect.Type;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
@@ -46,6 +48,8 @@ public class BungeeCordHandshake {
     private static final String PROPERTY_NAME_KEY = "name";
     /** The key used to define the value of properties in the handshake. */
     private static final String PROPERTY_VALUE_KEY = "value";
+    /** The maximum allowed length of the handshake. */
+    private static final int HANDSHAKE_LENGTH_LIMIT = 2500;
 
     /** Shared Gson instance. */
     private static final Gson GSON = new Gson();
@@ -65,21 +69,25 @@ public class BungeeCordHandshake {
             return decodeAndVerify0(handshake, tokenStore);
         } catch (Exception e) {
             new Exception("Failed to decode handshake", e).printStackTrace();
-            return new Fail(Fail.Reason.INVALID_HANDSHAKE, handshake);
+            return new Fail(Fail.Reason.INVALID_HANDSHAKE, encodeBase64(handshake));
         }
     }
 
     private static BungeeCordHandshake decodeAndVerify0(String handshake, TokenStore tokenStore) throws Exception {
+        if (handshake.length() > HANDSHAKE_LENGTH_LIMIT) {
+            return new Fail(Fail.Reason.INVALID_HANDSHAKE, "handshake length " + handshake.length() + " is > " + HANDSHAKE_LENGTH_LIMIT);
+        }
+
         String[] split = handshake.split("\00");
         if (split.length != 3 && split.length != 4) {
-            return new Fail(Fail.Reason.INVALID_HANDSHAKE, handshake);
+            return new Fail(Fail.Reason.INVALID_HANDSHAKE, encodeBase64(handshake));
         }
 
         String serverHostname = split[0];
         String socketAddressHostname = split[1];
         UUID uniqueId = UUID.fromString(split[2].replaceFirst("(\\w{8})(\\w{4})(\\w{4})(\\w{4})(\\w{12})", "$1-$2-$3-$4-$5"));
 
-        String connectionDescription = uniqueId + " @ " + socketAddressHostname;
+        String connectionDescription = uniqueId + " @ " + encodeBase64(socketAddressHostname);
 
         if (split.length == 3) {
             return new Fail(Fail.Reason.NO_TOKEN, connectionDescription);
@@ -94,6 +102,10 @@ public class BungeeCordHandshake {
         for (Iterator<JsonObject> iterator = properties.iterator(); iterator.hasNext(); ) {
             JsonObject property = iterator.next();
             if (property.get(PROPERTY_NAME_KEY).getAsString().equals(BUNGEEGUARD_TOKEN_NAME)) {
+                if (bungeeGuardToken != null) {
+                    return new Fail(Fail.Reason.INCORRECT_TOKEN, connectionDescription + " - more than one token");
+                }
+
                 bungeeGuardToken = property.get(PROPERTY_VALUE_KEY).getAsString();
                 iterator.remove();
             }
@@ -104,11 +116,15 @@ public class BungeeCordHandshake {
         }
 
         if (!tokenStore.isAllowed(bungeeGuardToken)) {
-            return new Fail(Fail.Reason.INCORRECT_TOKEN, connectionDescription + " - " + bungeeGuardToken);
+            return new Fail(Fail.Reason.INCORRECT_TOKEN, connectionDescription + " - " + encodeBase64(bungeeGuardToken));
         }
 
         String newPropertiesString = GSON.toJson(properties, PROPERTY_LIST_TYPE);
         return new Success(serverHostname, socketAddressHostname, uniqueId, newPropertiesString);
+    }
+    
+    public static String encodeBase64(String s) {
+        return Base64.getEncoder().encodeToString(s.getBytes(StandardCharsets.UTF_8));
     }
 
     /**
